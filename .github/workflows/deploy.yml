@@ -26,6 +26,13 @@ jobs:
       stats: ${{ steps.filter.outputs.stats }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
+      # Prints the OIDC token's claims (no secrets — just identity fields) so the
+      # IAM role's trust policy can be matched against the exact "sub" GitHub sends.
+      - name: Show OIDC token claims
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "$TOKEN" | python3 -c 'import sys,json,base64; p=sys.stdin.read().split(".")[1]; c=json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4))); print(json.dumps({k:c.get(k) for k in ("sub","aud","repository","ref","repository_owner")}, indent=2))'
       - uses: actions/checkout@v4
       - id: filter
         uses: dorny/paths-filter@v3
