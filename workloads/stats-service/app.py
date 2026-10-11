@@ -22,6 +22,7 @@ app.add_middleware(
 # explicitly permitted to reach visits-service's security group on 8080.
 VISITS_SERVICE_URL = os.environ["VISITS_SERVICE_URL"]
 
+# Reset on every container start, so a redeploy is visible as a fresh uptime.
 START_TIME = time.time()
 
 
