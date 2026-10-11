@@ -1,0 +1,94 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+# id-token: write lets the job request a GitHub OIDC token, which AWS exchanges
+# for temporary credentials (AssumeRoleWithWebIdentity) — no AWS keys in GitHub.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+  ROLE_ARN: arn:aws:iam::943939515041:role/final-project-github-actions
+  FRONTEND_BUCKET: final-project-frontend-943939515041
+  CF_DIST_ID: E116AGXFB34FU
+
+jobs:
+  # Decides which of the three workloads this push touched. Always runs, so a
+  # docs-only commit still produces a (green) pipeline run that deploys nothing.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      visits: ${{ steps.filter.outputs.visits }}
+      stats: ${{ steps.filter.outputs.stats }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            visits:
+              - 'workloads/visits-service/**'
+            stats:
+              - 'workloads/stats-service/**'
+            frontend:
+              - 'workloads/frontend/**'
+      - name: Summary
+        run: |
+          echo "visits-service changed: ${{ steps.filter.outputs.visits }}"
+          echo "stats-service changed:  ${{ steps.filter.outputs.stats }}"
+          echo "frontend changed:       ${{ steps.filter.outputs.frontend }}"
+
+  # Build -> push to its own ECR repo -> docker pull/stop/run on its own EC2 via SSM.
+  # Reuses the same script used for the manual deploy, so both paths stay identical.
+  visits-service:
+    needs: changes
+    if: needs.changes.outputs.visits == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: bash infra/07-deploy-services.sh visits
+
+  stats-service:
+    needs: changes
+    if: needs.changes.outputs.stats == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: bash infra/07-deploy-services.sh stats
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Inject ALB address into index.html
+        run: |
+          ALB_DNS=$(aws elbv2 describe-load-balancers --names final-project-alb \
+            --query 'LoadBalancers[0].DNSName' --output text)
+          mkdir -p build && cp -r workloads/frontend/. build/
+          sed -i "s|__API_BASE_URL__|http://$ALB_DNS|g" build/index.html
+          grep -n "API_BASE" build/index.html
+      - name: Upload to S3
+        run: aws s3 sync build/ "s3://$FRONTEND_BUCKET/" --delete
+      # Without this, CloudFront keeps serving its cached copy of the old index.html
+      # until the cache expires — the deploy would "succeed" but nobody would see it.
+      - name: Invalidate CloudFront cache
+        run: aws cloudfront create-invalidation --distribution-id "$CF_DIST_ID" --paths '/*'
