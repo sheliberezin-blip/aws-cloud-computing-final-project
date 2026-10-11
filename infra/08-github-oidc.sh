@@ -9,6 +9,10 @@ set -euo pipefail
 
 export AWS_REGION=eu-north-1
 GITHUB_REPO=sheliberezin-blip/aws-cloud-computing-final-project
+# GitHub now sends "sub" with immutable owner/repo IDs ("owner@<id>/repo@<id>"), so a
+# renamed-and-recreated repo with the same name can't inherit this role. Both formats
+# are accepted; both are still pinned to this one repo and the main branch.
+GITHUB_SUB_REPO=sheliberezin-blip@304075861/aws-cloud-computing-final-project@1414286085
 ROLE=final-project-github-actions
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
@@ -36,7 +40,10 @@ cat > "$TMP/trust.json" <<EOF
     "Condition": {
       "StringEquals": {
         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:$GITHUB_REPO:ref:refs/heads/main"
+        "token.actions.githubusercontent.com:sub": [
+          "repo:$GITHUB_REPO:ref:refs/heads/main",
+          "repo:$GITHUB_SUB_REPO:ref:refs/heads/main"
+        ]
       }
     }
   } ]
